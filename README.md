@@ -1,134 +1,175 @@
-# Gerrit ↔ Github 仓库对比分析表
+================================================================================
+  Gerrit -> Github 自动同步工具 (sync_gerrit_to_github.sh)
+================================================================================
 
-## 📊 概览
+目录
+----
+  auto_sync_bash/
+    sync_gerrit_to_github.sh    主脚本
+    sync_gerrit_to_github.conf  配置文件
+    lib/parse_manifest.py       manifest 解析
+    readme.txt                  本说明
 
-| 项目 | Gerrit (a2_release) | Github (bm1688) |
-|------|---------------------|-----------------|
-| **总仓库数** | 28 个 | 22 个 |
-| **共同仓库** | - | 18 个 |
-| **仅 Gerrit 有** | 6 个 | - |
-| **仅 Github 有** | - | 4 个 |
+代码根目录（可在 conf 中修改）:
+  gerrit_a2_release_code        Gerrit repo 工作区（源）
+  github_release_code_bm1688    Github repo 工作区（目标）
 
----
+前置条件
+--------
+  - 已安装 repo、python3、rsync、git
+  - 两侧均已 repo init / repo sync 过，且 .repo 目录存在
+  - Gerrit 侧可 source build/envsetup_soc.sh 并编译（FSBL、2d_engine 需要）
 
-## 🔗 详细的仓库映射关系
+快速开始
+--------
+  cd auto_sync_prj/auto_sync_bash
+  chmod +x sync_gerrit_to_github.sh
 
-### ✅ 共同仓库 (路径相同，可以直接同步)
+  # 查看将同步哪些仓库
+  ./sync_gerrit_to_github.sh --compare
 
-这些仓库在两个代码库中路径完全一致，可以直接同步文件内容：
+  # 预览（不 rsync、不 git add）
+  ./sync_gerrit_to_github.sh --dry-run
 
-| # | Gerrit 仓库名 | Github 仓库名 | 同步路径 | Gerrit 分支 | Github 分支 |
-|---|---------------|---------------|----------|-------------|-------------|
-| 1 | `cvi_build` | `build` | `build/` | a2_release | bm1688 |
-| 2 | `cvitek/buildroot-2021.05` | `buildroot-2021.05` | `buildroot/` | a2_release | bm1688 |
-| 3 | `cvi_rtsp` | `cvi_rtsp` | `cvi_rtsp/` | a2_release | master |
-| 4 | `fsbl` | `fsbl` | `fsbl/` | a2_release | bm1688 |
-| 5 | `host-tools` | `host-tools` | `host-tools/` | master | master |
-| 6 | `isp-tool-daemon` | `isp-tool-daemon` | `isp-tool-daemon/` | a2_release | bm1688 |
-| 7 | `isp_tuning` | `isp_tuning` | `isp_tuning/` | a2_release | bm1688 |
-| 8 | `libsophon` | `libsophon` | `libsophon/` | a2_release | bm1688 |
-| 9 | `linux-common` | `linux-common` | `linux-common/` | dev-edge-6.12.61 | linux-6.12.y |
-| 10 | `linux_5.10` | `linux_5.10` | `linux_5.10/` | a2_release | bm1688 |
-| 11 | `sophon_media` | `sophon_media` | `sophon_media/` | release | master |
-| 12 | `tdl_sdk` | `tdl_sdk` | `tdl_sdk/` | a2_release | bm1688 |
-| 13 | `u-boot-2021.10` | `u-boot-2021.10` | `u-boot-2021.10/` | a2_release | bm1688 |
-| 14 | `cvi_osdrv` | `osdrv` | `osdrv/` | a2_release | bm1688 |
-| 15 | `cvi_ramdisk` | `ramdisk` | `ramdisk/` | a2_release | bm1688 |
-| 16 | `cvitek/oss` | `oss` | `oss/` | master | master |
-| 17 | `cvi_middleware` | `middleware` | `middleware/` | a2_release | bm1688 |
-| 18 | `cvitek/isp-tool-daemon` | `isp-tool-daemon` | `isp-tool-daemon/` | a2_release | bm1688 |
+  # 完整同步
+  ./sync_gerrit_to_github.sh --sync
 
----
+命令一览
+--------
+  --compare              显示同步计划，不修改任何文件
+  --repo-prep-only       仅准备 Gerrit/Github 工作区（切分支、更新、清理）
+  --sync                 执行完整同步流程
+  --dry-run              预览全流程（不写文件）
+  --fsbl-only            仅处理 FSBL（编译 + 同步 + git add）
+  --fsbl-sync-only       仅 FSBL 同步（跳过编译）
+  --2d-engine-only       仅 2d_engine（双内核编译 + 同步 + git add）
+  --2d-engine-sync-only  仅 2d_engine 同步（跳过编译）
+  -h, --help             显示帮助
 
-### 📁 子目录映射仓库
+选项（配合 --sync 等）
+----------------------
+  --skip-fsbl            跳过 FSBL
+  --skip-2d-engine         跳过 2d_engine
+  --skip-compile           跳过所有编译，仅 rsync 已有发布产物
+  --skip-repo-prep         跳过 repo sync / clean / 切分支
 
-这些仓库被映射为其他仓库的子目录：
+仅准备工作区（--repo-prep-only）
+--------------------------------
+  不 rsync、不编译，只对 GERRIT_DIR / GITHUB_DIR 下所有子仓库:
 
-#### 1️⃣ `libsophav` - 双路径映射 ⭐
+    ./sync_gerrit_to_github.sh --repo-prep-only
 
-这是同一个仓库，但需要同步到两个不同位置：
+  执行内容:
+    1. repo sync -j4 -d --force-sync（manifest 指定版本）
+    2. repo forall: git reset --hard && git clean -fdx（删除 git 未跟踪文件）
+    3. 对 manifest 映射仓库 checkout 对应分支并 git pull 到最新
 
-| 仓库名 | 路径1 | 路径2 | 说明 |
-|--------|-------|-------|------|
-| `libsophav` | `libsophon/libsophav/` | `sophon_media/libsophav/` | 同一个仓库，两个父目录 |
+  可选:
+    --gerrit-only          只处理 Gerrit 侧
+    --github-only          只处理 Github 侧
 
-**同步策略**：
-- 从 Gerrit 的 `libsophon/libsophav/` 同步到 Github 的 `libsophon/libsophav/`
-- 从 Gerrit 的 `sophon_media/libsophav/` 同步到 Github 的 `sophon_media/libsophav/`
+  日志: auto_sync_bash/logs/repo_prep_YYYYMMDD_HHMMSS.log
 
-#### 2️⃣ `isp` - 子目录映射
+完整同步流程（--sync）
+----------------------
+  阶段 1 - repo 准备（Gerrit + Github，可用 --skip-repo-prep 跳过）
+    cd <工作区>
+    repo sync -j4 -d --force-sync --no-clone-bundle
+    repo forall -vc 'git reset --hard HEAD && git clean -fdx'
+    按 manifest 将各子仓库切换到对应 revision
 
-| Gerrit 路径 | Github 路径 | 说明 |
-|-------------|-------------|------|
-| `middleware/v2/modules/isp/` | `middleware/v2/modules/isp/` | 作为 middleware 的子模块 |
+  阶段 2 - 普通仓库源码同步
+    从 Gerrit rsync 到 Github（--existing：只更新 Github 已有文件，
+    不把 Gerrit 多出来的图片等文件拷过去）
+    osdrv 同步时排除 interdrv/v2/2d_engine 子目录
 
-#### 3️⃣ `SensorSupportList` - Gerrit 特有
+  阶段 3 - FSBL 特殊处理
+    defconfig edge_wevb_emmc（可配置）
+    build_fsbl
+    cd fsbl && ./a2_release.sh
+    rsync 到 github_release_code_bm1688/fsbl/
+    git add（不 commit）
 
-| Gerrit 路径 | 说明 |
-|-------------|------|
-| `middleware/v2/component/SensorSupportList/` | 仅 Gerrit 有，需要复制 |
+  阶段 4 - 2d_engine 特殊处理（osdrv/interdrv/v2/2d_engine）
+    1) linux-common: defconfig edge_emmc_debian -> build_kernel
+       -> build_osdrv 2d_engine -> a2_release.sh
+    2) git checkout 恢复 2d_engine 源码
+    3) linux_5.10: defconfig edge_wevb_emmc -> build_kernel
+       -> build_osdrv 2d_engine -> a2_release.sh
+    rsync 到 Github 对应目录
+    git add（不 commit）
 
----
+  阶段 5 - 收尾
+    脚本不执行 git commit / git push
+    日志: auto_sync_bash/logs/sync_YYYYMMDD_HHMMSS.log
 
-### 📥 仅 Gerrit 有的仓库 (需要复制到 Github)
+同步后人工提交（必须自行完成）
+------------------------------
+  cd ../github_release_code_bm1688/<仓库名>
+  git status
+  git diff --cached
+  git commit -m "sync from gerrit a2_release"
 
-| # | 仓库名 | Gerrit 路径 | 说明 |
-|---|--------|-------------|------|
-| 1 | `opensbi` | `opensbi/` | RISC-V 固件 |
-| 2 | `cvitek/SensorSupportList` | `middleware/v2/component/SensorSupportList/` | 传感器支持列表 |
-| 3 | `nvr_edge` | `frameworks/nvr_edge/` | NVR Edge 框架 |
-| 4 | `cvitek/mediapipe` | `mediapipe/` | MediaPipe |
-| 5 | `sophgo-develop-docs` | `sophgo-develop-docs/` | 开发文档 |
-| 6 | `pytest` / `pytest/testcases` | `pytest/` / `testcases/` | 测试框架和用例 |
+  示例:
+    cd ../github_release_code_bm1688/fsbl
+    git status && git commit -m "sync fsbl from gerrit"
 
----
+常用场景
+--------
+  # 同步前先单独整理两侧工作区
+  ./sync_gerrit_to_github.sh --repo-prep-only
 
-### 📤 仅 Github 有的仓库
+  # 只同步普通源码，不编 FSBL / 2d_engine
+  ./sync_gerrit_to_github.sh --sync --skip-fsbl --skip-2d-engine
 
-| # | 仓库名 | Github 路径 | 说明 |
-|---|--------|-------------|------|
-| 1 | `sophliteos` | `sophliteos/` | Sophlite OS (A2 分支) |
-| 2 | `manifest_*.xml` | `manifest_*.xml` | Repo 清单文件 |
+  # 本地已手动 repo sync，跳过准备步骤
+  ./sync_gerrit_to_github.sh --sync --skip-repo-prep
 
----
+  # 仅 FSBL（含编译，耗时）
+  ./sync_gerrit_to_github.sh --fsbl-only
 
-## 🔄 同步策略建议
+  # FSBL 已在 Gerrit 编好，只同步 + git add
+  ./sync_gerrit_to_github.sh --fsbl-sync-only
 
-### 1️⃣ 直接同步 (路径相同)
+  # 仅 2d_engine（双内核编译，耗时很长）
+  ./sync_gerrit_to_github.sh --2d-engine-only
 
-对于 18 个共同仓库，直接使用 `rsync` 同步文件内容。
+  # 2d_engine 已编好，只同步 + git add
+  ./sync_gerrit_to_github.sh --2d-engine-sync-only
 
-### 2️⃣ 子目录同步
+配置文件 sync_gerrit_to_github.conf
+------------------------------------
+  GERRIT_DIR / GITHUB_DIR          代码根路径
+  LOG_DIR                          日志目录
 
-对于 `libsophav`、`isp`、`SensorSupportList` 等子目录映射的仓库，需要：
-- 分别处理每个映射路径
-- 确保父目录存在
+  REPO_PREPARE_BEFORE_SYNC=true    同步前 repo 准备总开关
+  REPO_PREPARE_GERRIT=true         准备 Gerrit 侧
+  REPO_PREPARE_GITHUB=true         准备 Github 侧
+  REPO_CLEAN_WORKTREE=true         是否 git reset --hard && clean -fdx
+  REPO_SYNC_J=4                    repo sync 并行数
 
-### 3️⃣ 新仓库复制
+  GIT_STAGE_AFTER_SYNC=true        同步后对 Github 执行 git add，不 commit
+  SYNC_ONLY_EXISTING=true          不向 Github 添加 Gerrit 独有文件
+  DELETE_EXTRA_FILES=false         是否 rsync --delete（慎用）
 
-对于 6 个仅 Gerrit 有的仓库，需要完整复制到 Github 目录。
+  GERRIT_DEFCONFIG_FSBL=edge_wevb_emmc
+  GERRIT_DEFCONFIG_LINUX_510=edge_wevb_emmc
+  GERRIT_DEFCONFIG_LINUX_COMMON=edge_emmc_debian
 
-### 4️⃣ 排除处理
+  MANUAL_EXCLUDE_PATHS=( "sophliteos" )   手动排除的 Github 路径
 
-同步时需要排除：
-- `.git/` 目录
-- `.repo/` 目录
-- `manifest*.xml` 文件
+关闭同步后 git add:
+  GIT_STAGE_AFTER_SYNC=false
 
----
+关闭 Github 侧 repo 准备:
+  REPO_PREPARE_GITHUB=false
 
-## 📝 附录：仓库名映射表
+注意事项
+--------
+  1. repo forall 的 git clean -fdx 会删除未提交修改，运行前请备份重要本地改动。
+  2. FSBL、2d_engine 编译依赖 Gerrit 完整构建环境，请预留足够时间和磁盘。
+  3. sophliteos 等仅 Github 有的仓库会自动跳过。
+  4. 本工具不会 git commit，也不会 git push。
+  5. 旧版 sync_repos.sh / sync_fsbl.sh 与本工具独立，以本脚本为准。
 
-### Gerrit -> Github 仓库名映射
-
-| Gerrit 仓库名 | Github 仓库名 | 说明 |
-|---------------|---------------|------|
-| cvi_build | build | 构建系统 |
-| cvitek/buildroot-2021.05 | buildroot-2021.05 | Buildroot |
-| cvi_osdrv | osdrv | 操作系统驱动 |
-| cvi_ramdisk | ramdisk | Ramdisk |
-| cvitek/oss | oss | 开源软件 |
-| cvi_middleware | middleware | 中间件 |
-| cvitek/isp-tool-daemon | isp-tool-daemon | ISP 工具守护进程 |
-| cvitek/tdl_sdk | tdl_sdk | TDL SDK |
-| cvitek/buildroot-2021.05 | buildroot-2021.05 | Buildroot |
+================================================================================
